@@ -160,7 +160,11 @@ def check_memory() -> CheckResult:
 def check_gpu() -> CheckResult:
     """Le /sys para identificar a GPU e o driver. Nao executa carga na placa."""
     cards: list[dict[str, str]] = []
+    # Apenas cardN: cardN-DP-1, cardN-HDMI-A-1 e afins sao conectores de video,
+    # nao placas, e apontam de volta para o mesmo dispositivo PCI.
     for device in sorted(Path("/sys/class/drm").glob("card[0-9]*/device")):
+        if "-" in device.parent.name:
+            continue
         entry: dict[str, str] = {"card": device.parent.name}
         for field_name in ("vendor", "device"):
             try:

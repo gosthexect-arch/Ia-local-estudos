@@ -222,11 +222,56 @@ def check_json_capability(config: AppConfig) -> CheckResult:
     return CheckResult("llama_json", status, resumo, detalhes, hint=dica)
 
 
+class SequenciaDoModelo:
+    """Encadeia as verificacoes do llama-server.
+
+    Servidor fora do ar e uma unica causa: reportar quatro falhas para ela
+    esconderia o que realmente precisa de acao. Depois de `llama_health`
+    falhar, o resto vira SKIP.
+    """
+
+    def __init__(self, config: AppConfig) -> None:
+        self.config = config
+        self.servidor_no_ar = False
+
+    def arquivo(self) -> CheckResult:
+        return check_model_file(self.config)
+
+    def health(self) -> CheckResult:
+        resultado = check_server_health(self.config)
+        self.servidor_no_ar = resultado.status in (Status.OK, Status.WARN)
+        return resultado
+
+    def _pulado(self, nome: str) -> CheckResult:
+        return CheckResult(
+            name=nome,
+            status=Status.SKIP,
+            summary="nao verificado: llama-server fora do ar (ver llama_health)",
+            details={"motivo": "servidor inacessivel"},
+        )
+
+    def props(self) -> CheckResult:
+        if not self.servidor_no_ar:
+            return self._pulado("llama_props")
+        return check_server_props(self.config)
+
+    def models(self) -> CheckResult:
+        if not self.servidor_no_ar:
+            return self._pulado("llama_models")
+        return check_models_endpoint(self.config)
+
+    def json_capability(self) -> CheckResult:
+        if not self.servidor_no_ar:
+            return self._pulado("llama_json")
+        return check_json_capability(self.config)
+
+
 def build_checks(config: AppConfig) -> list[tuple[str, object]]:
+    sequencia = SequenciaDoModelo(config)
     return [
-        ("arquivo_modelo", lambda: check_model_file(config)),
-        ("llama_health", lambda: check_server_health(config)),
-        ("llama_props", lambda: check_server_props(config)),
-        ("llama_models", lambda: check_models_endpoint(config)),
-        ("llama_json", lambda: check_json_capability(config)),
+        ("arquivo_modelo", sequencia.arquivo),
+        ("llama_health", sequencia.health),
+        ("llama_props", sequencia.props),
+        ("llama_models", sequencia.models),
+        ("llama_json", sequencia.json_capability),
     ]

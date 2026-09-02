@@ -105,7 +105,12 @@ def proximos_passos(results: list[CheckResult]) -> list[str]:
         passos.append(
             "Fonte de dados indisponivel: reavaliar Binance/Coinbase/Kraken antes da Fase 2."
         )
-    if por_nome.get("llama_json") in (Status.FAIL, Status.WARN):
+    if por_nome.get("llama_json") is Status.SKIP:
+        passos.append(
+            "llama-server desligado: suba-o e rode o doctor de novo para fechar a Fase 1. "
+            "As fases 2 e 3 sao deterministicas e nao dependem dele."
+        )
+    elif por_nome.get("llama_json") in (Status.FAIL, Status.WARN):
         passos.append(
             "Modelo ainda nao fecha o contrato JSON: a Fase 2 e a 3 nao dependem disso e "
             "podem seguir sem ele."

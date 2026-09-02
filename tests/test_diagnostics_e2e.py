@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from cripto_monitor.config import AppConfig, ExchangeConfig, LLMConfig, NetworkConfig
 from cripto_monitor.diagnostics import exchange as diag_exchange
 from cripto_monitor.diagnostics import model as diag_model
-from cripto_monitor.diagnostics.base import Status
+from cripto_monitor.diagnostics.base import Status, run_checks
+from cripto_monitor.diagnostics.report import proximos_passos
 from cripto_monitor.schema import EXAMPLE_ALERT
 from test_wsprobe import FakeWebSocketServer, server_frame
 from cripto_monitor.net import wsprobe
@@ -177,6 +178,25 @@ class TestDiagnosticoDoModelo(unittest.TestCase):
     def test_modelo_ausente_no_disco_e_aviso(self) -> None:
         resultado = diag_model.check_model_file(config_para(9))
         self.assertIs(resultado.status, Status.WARN)
+
+    def test_servidor_fora_do_ar_gera_uma_falha_e_o_resto_pulado(self) -> None:
+        resultados = run_checks(diag_model.build_checks(config_para(9)))
+        por_nome = {r.name: r.status for r in resultados}
+        self.assertIs(por_nome["llama_health"], Status.FAIL)
+        for nome in ("llama_props", "llama_models", "llama_json"):
+            self.assertIs(por_nome[nome], Status.SKIP, nome)
+
+    def test_servidor_no_ar_executa_a_sequencia_inteira(self) -> None:
+        with ServidorLocal() as servidor:
+            resultados = run_checks(diag_model.build_checks(config_para(servidor.port)))
+        por_nome = {r.name: r.status for r in resultados}
+        self.assertIs(por_nome["llama_health"], Status.OK)
+        self.assertIs(por_nome["llama_json"], Status.OK)
+
+    def test_proximo_passo_para_servidor_desligado(self) -> None:
+        resultados = run_checks(diag_model.build_checks(config_para(9)))
+        passos = proximos_passos(resultados)
+        self.assertTrue(any("llama-server desligado" in p for p in passos), passos)
 
 
 if __name__ == "__main__":
