@@ -1,0 +1,29 @@
+# Exemplo de configuracao do cripto-monitor.
+# Copie para ~/.config/cripto-monitor/monitor.toml e ajuste o que precisar.
+# Todas as chaves sao opcionais: o que faltar usa o padrao do codigo.
+# Este arquivo nunca deve conter credenciais - o projeto so usa dados publicos.
+
+[exchange]
+name = "binance"
+rest_base = "https://api.binance.com"
+ws_base = "wss://stream.binance.com:9443"
+symbol = "ETHUSDT"
+primary_timeframe = "5m"
+timeframes = ["5m", "15m", "1h"]
+
+[llm]
+base_url = "http://127.0.0.1:8080/v1"
+model_path = "/home/ght/models/gemma4/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+# Prazo maximo aceitavel entre o fechamento da vela e o alerta.
+max_latency_s = 60.0
+request_timeout_s = 90.0
+
+[paths]
+# Padrao: $XDG_DATA_HOME/cripto-monitor (normalmente ~/.local/share/cripto-monitor)
+# data_dir = "/home/ght/.local/share/cripto-monitor"
+
+[network]
+connect_timeout_s = 10.0
+probe_messages = 3
+probe_timeout_s = 30.0
+max_clock_drift_ms = 1000.0

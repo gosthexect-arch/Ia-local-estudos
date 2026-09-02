@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Dados locais do monitor (nunca versionar)
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.parquet
+logs/
+*.log
+
+# Segredos (o MVP nao usa credenciais; a regra fica valendo mesmo assim)
+.env
+*.key

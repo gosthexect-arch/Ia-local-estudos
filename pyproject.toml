@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cripto-monitor"
+version = "0.1.0"
+description = "Assistente local de monitoramento continuo de criptomoedas (somente observacao, sem execucao de ordens)"
+readme = "README.md"
+requires-python = ">=3.11"
+# Fase 1 roda apenas com a biblioteca padrao. Dependencias externas so serao
+# adicionadas nas fases seguintes, mediante autorizacao explicita.
+dependencies = []
+
+[project.optional-dependencies]
+# Reservado para a Fase 2 (coletor WebSocket de producao). Ainda nao instalar.
+collector = ["websockets>=12", "aiosqlite>=0.19"]
+
+[project.scripts]
+cripto-monitor = "cripto_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
