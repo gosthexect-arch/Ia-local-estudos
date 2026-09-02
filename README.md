@@ -19,17 +19,26 @@ escreve em disco e nao altera configuracao do sistema.
 Roda **apenas com a biblioteca padrao do Python 3.11+** — nada para instalar.
 
 ```bash
-git clone <este-repo> && cd Ia-local-estudos
+git clone -b claude/project-summary-swe8g6 https://github.com/gosthexect-arch/Ia-local-estudos.git
+cd Ia-local-estudos
 PYTHONPATH=src python3 -m cripto_monitor doctor
 ```
 
-Ou, instalando no ambiente do usuario para ganhar o comando `cripto-monitor`:
+O `-b` e necessario enquanto a Fase 1 nao estiver na branch principal. Ja tendo
+o repositorio clonado, basta `git pull` dentro dele.
+
+Opcionalmente, instalando num ambiente virtual para ganhar o comando
+`cripto-monitor` direto no PATH e dispensar o `PYTHONPATH`:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e .
 cripto-monitor doctor
 ```
+
+O projeto nao tem dependencias, mas o `pip install -e .` ainda busca o setuptools
+para montar o pacote. Com o setuptools ja instalado, `pip install -e . --no-build-isolation`
+resolve offline. O modo com `PYTHONPATH` acima nao precisa de nada disso.
 
 ### Comandos
 
