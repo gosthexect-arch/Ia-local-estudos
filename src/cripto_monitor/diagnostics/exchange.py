@@ -10,72 +10,43 @@ from __future__ import annotations
 import json
 import socket
 import time
-from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from cripto_monitor.candles import CandleError, iso
 from cripto_monitor.config import AppConfig
 from cripto_monitor.diagnostics.base import CheckResult, Status
+from cripto_monitor.exchanges import get_adapter
 from cripto_monitor.net import wsprobe
 from cripto_monitor.net.http import HttpError, get_json
 from cripto_monitor.term import human_ms
 
-# Ordem dos campos em cada linha de /api/v3/klines.
-KLINE_FIELDS = (
-    "open_time",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "close_time",
-    "quote_volume",
-    "trades",
-    "taker_buy_base",
-    "taker_buy_quote",
-    "ignore",
-)
+
+def _adapter(config: AppConfig):
+    return get_adapter(config.exchange.name, config.exchange.rest_base, config.exchange.ws_base)
 
 
-def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat(timespec="milliseconds")
-
-
-def summarize_kline_row(row: list[Any], *, now_ms: int | None = None) -> dict[str, Any]:
-    """Normaliza uma linha REST de kline. `closed` vem do relogio, nao do modelo."""
-    if len(row) < 7:
-        raise ValueError(f"linha de kline com formato inesperado: {len(row)} campos")
-    data = dict(zip(KLINE_FIELDS, row))
+def summarize_kline_row(
+    row: list[Any], *, now_ms: int | None = None, config: AppConfig | None = None
+) -> dict[str, Any]:
+    """Normaliza uma linha REST de kline usando o adaptador da exchange."""
+    config = config or AppConfig()
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    close_time = int(data["close_time"])
-    return {
-        "open_time_utc": _iso(int(data["open_time"])),
-        "close_time_utc": _iso(close_time),
-        "open": float(data["open"]),
-        "high": float(data["high"]),
-        "low": float(data["low"]),
-        "close": float(data["close"]),
-        "volume": float(data["volume"]),
-        "trades": int(data.get("trades", 0)),
-        "state": "closed" if close_time <= now_ms else "forming",
-    }
+    velas = _adapter(config).parse_backfill(
+        [row], config.exchange.symbol, config.exchange.primary_timeframe, now_ms=now_ms
+    )
+    return velas[0].to_dict()
 
 
-def summarize_kline_event(payload: dict[str, Any]) -> dict[str, Any]:
-    """Normaliza um evento `kline` do stream. `x` indica vela fechada."""
-    kline = payload.get("k")
-    if not isinstance(kline, dict):
-        raise ValueError("evento sem o objeto 'k' de kline")
-    return {
-        "symbol": kline.get("s"),
-        "interval": kline.get("i"),
-        "open_time_utc": _iso(int(kline["t"])),
-        "close_time_utc": _iso(int(kline["T"])),
-        "close": float(kline["c"]),
-        "volume": float(kline["v"]),
-        "state": "closed" if kline.get("x") else "forming",
-        "event_time_utc": _iso(int(payload["E"])) if "E" in payload else None,
-    }
+def summarize_kline_event(payload: dict[str, Any], *, config: AppConfig | None = None) -> dict[str, Any]:
+    """Normaliza um evento do stream usando o adaptador da exchange."""
+    config = config or AppConfig()
+    vela = _adapter(config).parse_message(json.dumps(payload))
+    if vela is None:
+        raise CandleError("mensagem nao carrega uma vela")
+    resumo = vela.to_dict()
+    resumo["event_time_utc"] = iso(int(payload["E"])) if "E" in payload else None
+    return resumo
 
 
 def check_dns(config: AppConfig) -> CheckResult:
@@ -153,7 +124,7 @@ def check_clock_drift(config: AppConfig) -> CheckResult:
         details={
             "drift_ms": round(drift, 1),
             "rtt_ms": round(depois - antes, 1),
-            "servidor_utc": _iso(int(servidor)),
+            "servidor_utc": iso(int(servidor)),
             "latencia_http_ms": round(resp.elapsed_ms, 1),
         },
         hint=None if dentro else "Sincronize o relogio (NTP) antes de confiar nos fechamentos.",
@@ -163,17 +134,17 @@ def check_clock_drift(config: AppConfig) -> CheckResult:
 def check_klines(config: AppConfig) -> CheckResult:
     """Baixa poucas velas historicas e valida forma, ordem e estado."""
     ex = config.exchange
-    url = (
-        f"{ex.rest_base}/api/v3/klines?symbol={ex.symbol}"
-        f"&interval={ex.primary_timeframe}&limit=3"
-    )
+    url = _adapter(config).backfill_url(ex.symbol, ex.primary_timeframe, limit=3)
     try:
         rows, resp = get_json(url, timeout=config.network.connect_timeout_s)
     except HttpError as exc:
         return CheckResult("klines_rest", Status.FAIL, str(exc), {"url": url})
     if not isinstance(rows, list) or not rows:
         return CheckResult("klines_rest", Status.FAIL, "resposta vazia ou inesperada", {"url": url})
-    velas = [summarize_kline_row(row) for row in rows]
+    try:
+        velas = [summarize_kline_row(row, config=config) for row in rows]
+    except CandleError as exc:
+        return CheckResult("klines_rest", Status.FAIL, f"vela invalida: {exc}", {"url": url})
     fechadas = [v for v in velas if v["state"] == "closed"]
     ordenadas = all(
         velas[i]["open_time_utc"] < velas[i + 1]["open_time_utc"] for i in range(len(velas) - 1)
@@ -200,7 +171,7 @@ def check_klines(config: AppConfig) -> CheckResult:
 
 def check_websocket(config: AppConfig) -> CheckResult:
     """Sondagem curta do stream de velas: prova conectividade e formato do evento."""
-    url = config.exchange.ws_stream_url
+    url = _adapter(config).stream_url(config.exchange.symbol, config.exchange.primary_timeframe)
     try:
         resultado = wsprobe.probe(
             url,
@@ -220,7 +191,7 @@ def check_websocket(config: AppConfig) -> CheckResult:
     invalidos = 0
     for bruto in resultado.messages:
         try:
-            eventos.append(summarize_kline_event(json.loads(bruto)))
+            eventos.append(summarize_kline_event(json.loads(bruto), config=config))
         except (json.JSONDecodeError, ValueError, KeyError):
             invalidos += 1
     status = Status.OK if eventos and not invalidos else Status.WARN

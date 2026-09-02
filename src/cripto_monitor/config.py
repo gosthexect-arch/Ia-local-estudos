@@ -89,11 +89,28 @@ class NetworkConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CollectorConfig:
+    # Sem mensagem por este tempo, a conexao e considerada morta mesmo "aberta".
+    stale_after_s: float = 90.0
+    ping_interval_s: float = 20.0
+    ping_timeout_s: float = 20.0
+    backoff_initial_s: float = 1.0
+    backoff_max_s: float = 60.0
+    # Fracao de aleatoriedade somada ao backoff, para nao reconectar em manada.
+    backoff_jitter: float = 0.3
+    # Velas buscadas por REST ao conectar, para cobrir o periodo offline.
+    backfill_limit: int = 500
+    # Grava cada mensagem original em JSONL comprimido (auditoria e replay fiel).
+    store_raw: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    collector: CollectorConfig = field(default_factory=CollectorConfig)
     source_path: Path | None = None
 
 
@@ -125,7 +142,7 @@ def _apply_section(section: Any, values: dict[str, Any], where: str) -> Any:
 
 def apply_toml(config: AppConfig, raw: dict[str, Any]) -> AppConfig:
     """Aplica um dicionario ja carregado de TOML sobre a configuracao."""
-    sections = {"exchange", "llm", "paths", "network"}
+    sections = {"exchange", "llm", "paths", "network", "collector"}
     updates: dict[str, Any] = {}
     for name, values in raw.items():
         if name not in sections:
@@ -193,6 +210,16 @@ def as_dict(config: AppConfig) -> dict[str, Any]:
             "probe_messages": config.network.probe_messages,
             "probe_timeout_s": config.network.probe_timeout_s,
             "max_clock_drift_ms": config.network.max_clock_drift_ms,
+        },
+        "collector": {
+            "stale_after_s": config.collector.stale_after_s,
+            "ping_interval_s": config.collector.ping_interval_s,
+            "ping_timeout_s": config.collector.ping_timeout_s,
+            "backoff_initial_s": config.collector.backoff_initial_s,
+            "backoff_max_s": config.collector.backoff_max_s,
+            "backoff_jitter": config.collector.backoff_jitter,
+            "backfill_limit": config.collector.backfill_limit,
+            "store_raw": config.collector.store_raw,
         },
         "source_path": str(config.source_path) if config.source_path else None,
     }

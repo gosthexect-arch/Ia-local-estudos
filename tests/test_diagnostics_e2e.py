@@ -9,6 +9,7 @@ import unittest
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from cripto_monitor.candles import align_open_time
 from cripto_monitor.config import AppConfig, ExchangeConfig, LLMConfig, NetworkConfig
 from cripto_monitor.diagnostics import exchange as diag_exchange
 from cripto_monitor.diagnostics import model as diag_model
@@ -19,13 +20,16 @@ from test_wsprobe import FakeWebSocketServer, server_frame
 from cripto_monitor.net import wsprobe
 
 AGORA_MS = int(time.time() * 1000)
+# Aberturas alinhadas ao passo de 5m, como a exchange entrega.
+ABERTURA_ATUAL = align_open_time(AGORA_MS, "5m")
+ABERTURA_ANTERIOR = ABERTURA_ATUAL - 300_000
 VELA_FECHADA = [
-    AGORA_MS - 600_000, "3500.10", "3510.00", "3495.00", "3505.55", "120.5",
-    AGORA_MS - 300_001, "422000.0", 987, "60.2", "211000.0", "0",
+    ABERTURA_ANTERIOR, "3500.10", "3510.00", "3495.00", "3505.55", "120.5",
+    ABERTURA_ANTERIOR + 299_999, "422000.0", 987, "60.2", "211000.0", "0",
 ]
 VELA_ABERTA = [
-    AGORA_MS - 300_000, "3505.55", "3512.00", "3501.00", "3508.00", "40.1",
-    AGORA_MS + 299_999, "140000.0", 300, "20.0", "70000.0", "0",
+    ABERTURA_ATUAL, "3505.55", "3512.00", "3501.00", "3508.00", "40.1",
+    ABERTURA_ATUAL + 299_999, "140000.0", 300, "20.0", "70000.0", "0",
 ]
 
 
@@ -76,7 +80,7 @@ class ServidorLocal:
     def __enter__(self) -> "ServidorLocal":
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), FakeHandler)
         self.port = self.httpd.server_address[1]
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, kwargs={'poll_interval': 0.02}, daemon=True)
         self.thread.start()
         return self
 
@@ -125,8 +129,9 @@ class TestDiagnosticoDeMercado(unittest.TestCase):
     def test_websocket_recebe_evento_de_vela(self) -> None:
         evento = json.dumps({
             "e": "kline", "E": AGORA_MS,
-            "k": {"t": AGORA_MS - 300_000, "T": AGORA_MS, "s": "ETHUSDT", "i": "5m",
-                  "c": "3505.55", "v": "120.5", "x": True},
+            "k": {"t": ABERTURA_ANTERIOR, "T": ABERTURA_ANTERIOR + 299_999, "s": "ETHUSDT",
+                  "i": "5m", "o": "3500.10", "h": "3510.00", "l": "3495.00", "c": "3505.55",
+                  "v": "120.5", "q": "422000.0", "n": 987, "x": True},
         })
         with FakeWebSocketServer([server_frame(wsprobe.OP_TEXT, evento.encode())]) as servidor:
             resultado = diag_exchange.check_websocket(config_para(servidor.port))

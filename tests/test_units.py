@@ -128,7 +128,8 @@ class TestNormalizacaoDeVelas(unittest.TestCase):
         evento = summarize_kline_event(
             {"e": "kline", "E": 1735689899000, "k": {
                 "t": 1735689600000, "T": 1735689899999, "s": "ETHUSDT", "i": "5m",
-                "c": "3505.55", "v": "120.5", "x": True}}
+                "o": "3500.10", "h": "3510.00", "l": "3495.00", "c": "3505.55",
+                "v": "120.5", "q": "422000.0", "n": 987, "x": True}}
         )
         self.assertEqual(evento["state"], "closed")
         self.assertEqual(evento["symbol"], "ETHUSDT")
@@ -136,6 +137,12 @@ class TestNormalizacaoDeVelas(unittest.TestCase):
     def test_evento_sem_kline(self) -> None:
         with self.assertRaises(ValueError):
             summarize_kline_event({"e": "trade"})
+
+    def test_vela_desalinhada_com_o_timeframe_e_rejeitada(self) -> None:
+        linha = list(self.LINHA)
+        linha[0] = 1735689612345  # abertura fora da grade de 5m
+        with self.assertRaises(ValueError):
+            summarize_kline_row(linha, now_ms=1735690000000)
 
 
 class TestExtracaoDeJson(unittest.TestCase):

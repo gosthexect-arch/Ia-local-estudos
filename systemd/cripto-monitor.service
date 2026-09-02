@@ -1,0 +1,51 @@
+# Servico de usuario do coletor (Fase 2).
+#
+# Instalacao (sem sudo, sem tocar o sistema):
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/cripto-monitor.service ~/.config/systemd/user/
+#   # ajuste WorkingDirectory/PYTHONPATH se o repo nao estiver em ~/Ia-local-estudos
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now cripto-monitor
+#   journalctl --user -u cripto-monitor -f
+#
+# Para o coletor continuar rodando depois do logout:
+#   loginctl enable-linger $USER
+
+[Unit]
+Description=cripto-monitor - coletor de velas (somente observacao, sem ordens)
+Documentation=file:%h/Ia-local-estudos/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Ia-local-estudos
+Environment=PYTHONPATH=%h/Ia-local-estudos/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m cripto_monitor collect --log-json
+
+# O estado vive em SQLite: reiniciar nao perde historico nem reemite vela ja
+# gravada. SIGINT aciona a parada limpa do coletor.
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cripto-monitor
+
+# Endurecimento: o servico so le o codigo e escreve no diretorio de dados.
+# Se o servico falhar ao iniciar com systemd antigo, comente este bloco.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/cripto-monitor
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target

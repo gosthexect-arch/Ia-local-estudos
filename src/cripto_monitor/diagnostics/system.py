@@ -199,6 +199,27 @@ def check_gpu() -> CheckResult:
     )
 
 
+def check_dependencias() -> CheckResult:
+    """A Fase 1 nao precisa de nada; a Fase 2 precisa de um cliente WebSocket."""
+    try:
+        import websockets  # noqa: PLC0415 - checagem deliberada em tempo de execucao
+    except ImportError:
+        return CheckResult(
+            name="dependencias",
+            status=Status.WARN,
+            summary="'websockets' ausente (necessaria a partir da Fase 2)",
+            details={"websockets": None},
+            hint="No Arch: sudo pacman -S python-websockets. O doctor nao precisa dela.",
+        )
+    versao = getattr(websockets, "__version__", "?")
+    return CheckResult(
+        name="dependencias",
+        status=Status.OK,
+        summary=f"websockets {versao} disponivel",
+        details={"websockets": versao},
+    )
+
+
 def check_clock() -> CheckResult:
     """Confere que o processo consegue trabalhar em UTC (requisito da spec)."""
     agora = datetime.now(timezone.utc)
@@ -265,6 +286,7 @@ def build_checks(config: AppConfig) -> list[tuple[str, object]]:
         ("cpu", check_cpu),
         ("memoria", check_memory),
         ("gpu", check_gpu),
+        ("dependencias", check_dependencias),
         ("relogio", check_clock),
         ("armazenamento", lambda: check_paths(config)),
     ]

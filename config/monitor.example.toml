@@ -27,3 +27,16 @@ connect_timeout_s = 10.0
 probe_messages = 3
 probe_timeout_s = 30.0
 max_clock_drift_ms = 1000.0
+
+[collector]
+# Sem mensagem por este tempo, a conexao e considerada morta mesmo "aberta".
+stale_after_s = 90.0
+ping_interval_s = 20.0
+ping_timeout_s = 20.0
+backoff_initial_s = 1.0
+backoff_max_s = 60.0
+backoff_jitter = 0.3
+# Velas buscadas por REST ao conectar, para cobrir o periodo offline.
+backfill_limit = 500
+# Guarda cada mensagem original em JSONL comprimido (auditoria e replay fiel).
+store_raw = true
