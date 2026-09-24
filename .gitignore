@@ -1,0 +1,17 @@
+# Ambiente e segredos
+.venv/
+.env
+__pycache__/
+*.pyc
+
+# Gerados em tempo de execucao
+hardware_profile.json
+settings.json
+logs/
+workspace/*
+!workspace/.gitkeep
+.gradio/
+
+# Modelos (grandes demais para o git)
+models/*
+!models/LEIA-ME.txt
