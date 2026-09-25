@@ -30,7 +30,7 @@ Tudo começa por um único arquivo: **`start.bat`**.
 | Chave Tavily | Pedida **somente na primeira instalação** e salva em `.env` (`TAVILY_API_KEY=...`). |
 | Python + `.venv` | Encontra Python 3.10–3.13 (ou instala via winget) e cria o ambiente virtual isolado. |
 | Scan de hardware | `python -m core.hardware` detecta GPU (NVIDIA via `nvidia-smi`; AMD/Intel via registro do Windows), VRAM, versão de CUDA do driver, *compute capability*, núcleos físicos/lógicos e núcleos P/E de CPUs híbridas. |
-| Build do llama.cpp | Escolhe e testa a wheel pré-compilada certa: **CUDA 12.5/12.4/11.8** (NVIDIA, a partir da GTX 10xx) → **Vulkan** (AMD/Intel/NVIDIA antigas) → **CPU**. Se o CUDA Toolkit não estiver instalado, instala só o runtime (`cudart` + `cuBLAS`) via pip. A build só é aceita depois de verificar que o llama.cpp enxerga a GPU. |
+| Build do llama.cpp | Instala o `llama-cpp-python` **0.3.35** e ativa a GPU: NVIDIA → wheel CUDA 12.5/12.4 ou o **plugin CUDA oficial do llama.cpp**; AMD / Intel Arc (ou NVIDIA antiga) → **plugin Vulkan oficial**; sem GPU → CPU. Os plugins vêm da release **b10454** do llama.cpp, compilada do mesmo commit do 0.3.35 (ABI idêntica), e são carregados em tempo de execução — sem compilar nada. Cada opção só é aceita depois de uma **inferência de teste na GPU**; se falhar, passa para a próxima. Tudo fica registrado em `logs/instalacao.log`. |
 | Dependências | `pip install -r requirements.txt` (repetido só quando o arquivo muda). |
 | Threads e camadas | Calcula `n_threads` ideal e o máximo de `n_gpu_layers` para cada GGUF em `models/` (gravado em `hardware_profile.json`) e abre a interface. |
 
@@ -100,7 +100,8 @@ requirements.txt       # dependências Python
 personality.txt        # personalidade (System Prompt)
 app.py                 # interface Gradio
 core/
-  hardware.py          # scan de hardware, escolha da build, DLLs CUDA (só stdlib)
+  hardware.py          # scan de hardware, escolha do backend, verificação (só stdlib)
+  gpu_plugins.py       # plugins oficiais de GPU do llama.cpp: download e carga (só stdlib)
   gguf_info.py         # leitor de metadados GGUF (só stdlib)
   offload.py           # planejador de n_gpu_layers / KV cache (só stdlib)
   models.py            # descoberta de modelos e pareamento com o mmproj
@@ -125,17 +126,20 @@ estudos anteriores com Ollama e não são usados pelo app.
 | `TAVILY_API_KEY` | Chave do Tavily (pedida pelo start.bat). |
 | `TAVILY_SEARCH_DEPTH` | `advanced` (padrão, 2 créditos/busca) ou `basic` (1 crédito). |
 | `APP_PORT` / `APP_HOST` | Porta/endereço da interface (padrão `7860` / `127.0.0.1`). |
-| `IA_BACKEND` | Força a build do llama.cpp, ex.: `cu124`, `vulkan` ou `cpu`. Apague `.venv\llama_backend.txt` para reinstalar. |
+| `IA_BACKEND` | Força o backend, ex.: `vulkan`, `cuda`, `cu124` ou `cpu`. Apague `.venv\llama_backend.txt` para reinstalar. |
 
 As preferências da interface ficam em `settings.json`; logs em `logs/app.log`.
 
 ## Solução de problemas
 
-- **"build preferida falhou" / ficou em CPU**: veja as mensagens do `start.bat`. Atualize o driver da GPU e
-  apague `.venv\llama_backend.txt` para tentar de novo (ou force com `IA_BACKEND`).
+- **"usando cpu porque vulkan/cuda falhou"**: o motivo está em `logs/instalacao.log` (e o pip em
+  `logs/pip_llama.log`). Atualize o driver da GPU e apague `.venv\llama_backend.txt` para tentar de novo
+  (ou force com `IA_BACKEND`).
+- **Atualizar o app**: baixe o ZIP novo e extraia **por cima** da pasta atual (mantém `.venv`, `.env` e `models`).
 - **Lento / pouca VRAM**: reduza o contexto no slider (a estimativa mostra até onde cabe 100% na GPU), use uma
   quantização menor (Q4_K_M) ou deixe o KV cache em `auto`/`q8_0`.
-- **Modelo não aparece**: ele precisa do arquivo `mmproj` na mesma pasta (o app exige VLM). Clique em ↻.
+- **Modelo não aparece**: falta o arquivo `mmproj-*.gguf` (projetor de visão) na mesma pasta — o menu lateral
+  mostra quais modelos estão sem ele, com um link de busca. Baixe do mesmo repositório do modelo e clique em ↻.
 - **Busca web indisponível**: confira `TAVILY_API_KEY` no `.env`.
 - Para reinstalar tudo do zero, apague a pasta `.venv` e rode o `start.bat`.
 

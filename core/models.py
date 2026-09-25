@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from core.config import MODELS_DIR
 from core.gguf_info import is_secondary_split, try_read_gguf
@@ -82,6 +83,23 @@ def find_mmproj(model_path: Path) -> Path | None:
     if score >= top and (score > 0 or top == 0):
         return best
     return None
+
+
+def mmproj_search_url(model_path: Path) -> str:
+    """Link de busca no Hugging Face para achar o mmproj de um modelo órfão."""
+    info = try_read_gguf(model_path)
+    term = ""
+    if info is not None:
+        for key in ("general.base_model.0.repo_url", "general.source.huggingface.repository", "general.source.url"):
+            value = info.get(key)
+            if isinstance(value, str) and value.strip():
+                term = value.rstrip("/").split("/")[-1]
+                break
+        if not term and isinstance(info.get("general.basename"), str):
+            term = "-".join(str(info.get(k)) for k in ("general.basename", "general.size_label") if info.get(k))
+    if not term:
+        term = re.sub(r"[-_.](i?q\d.*|[bf]f?16|f32)$", "", model_path.stem, flags=re.IGNORECASE)
+    return f"https://huggingface.co/models?library=gguf&search={quote(term)}"
 
 
 def list_models(models_dir: Path = MODELS_DIR) -> tuple[list[ModelEntry], list[Path]]:

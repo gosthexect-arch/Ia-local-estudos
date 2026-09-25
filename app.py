@@ -25,7 +25,7 @@ import gradio as gr
 from core.agent import Agent, Conversation
 from core.config import LOGS_DIR, MODELS_DIR, Settings, ensure_dirs, load_env, tavily_api_key
 from core.engine import EngineError, LlamaEngine
-from core.models import ModelEntry, list_models
+from core.models import ModelEntry, list_models, mmproj_search_url
 from core.offload import max_context_for_full_offload
 
 ensure_dirs()
@@ -83,13 +83,18 @@ def hardware_md() -> str:
 
 
 def models_note() -> str:
-    if not APP.models:
-        return ("<small>Nenhum VLM encontrado. Coloque o <b>.gguf do modelo</b> e o <b>mmproj .gguf</b> na "
-                f"pasta <code>{MODELS_DIR}</code> e clique em ↻.</small>")
+    parts = []
     if APP.orphans:
-        names = ", ".join(p.name for p in APP.orphans[:3])
-        return f"<small>⚠️ Ignorados (sem mmproj, não são VLM): {names}{'…' if len(APP.orphans) > 3 else ''}</small>"
-    return ""
+        items = "".join(f"<br>• <b>{p.name}</b> — <a href='{mmproj_search_url(p)}' target='_blank'>procurar mmproj</a>"
+                        for p in APP.orphans[:4])
+        more = f"<br>… e mais {len(APP.orphans) - 4}" if len(APP.orphans) > 4 else ""
+        parts.append("⚠️ <b>Falta o arquivo mmproj</b> (projetor de visão) destes modelos, por isso eles não "
+                     f"aparecem na lista:{items}{more}<br>Baixe o <code>mmproj-*.gguf</code> do mesmo repositório "
+                     "do modelo, coloque na mesma pasta e clique em ↻ Atualizar lista.")
+    elif not APP.models:
+        parts.append("Nenhum modelo encontrado. Coloque o <b>.gguf do modelo</b> e o <b>mmproj .gguf</b> na "
+                     f"pasta <code>{MODELS_DIR}</code> e clique em ↻ Atualizar lista.")
+    return "<small>" + "<br><br>".join(parts) + "</small>" if parts else ""
 
 
 def plan_md(model_key: str | None, n_ctx: float | None) -> str:

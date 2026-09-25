@@ -18,9 +18,12 @@ set "PYTHONIOENCODING=utf-8"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 set "VENV=%~dp0.venv"
 set "PY=%VENV%\Scripts\python.exe"
-set "LLAMA_SPEC=llama-cpp-python>=0.3.26,<0.4"
+rem Versao fixada: os plugins oficiais de GPU do llama.cpp (core\gpu_plugins.py) sao do mesmo commit.
+set "LLAMA_SPEC=llama-cpp-python==0.3.35"
 set "WHL_BASE=https://abetlen.github.io/llama-cpp-python/whl"
 set "TMPF=%TEMP%\ia_local_%RANDOM%.txt"
+set "LOGDIR=%~dp0logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
 echo.
 echo  ==============================================================
@@ -56,9 +59,9 @@ rem ---------------------------------------------------------------- 4
 set "INSTALLED="
 set "PREV_CANDS="
 if exist "%VENV%\llama_backend.txt" set /p INSTALLED=<"%VENV%\llama_backend.txt"
-if exist "%VENV%\llama_candidates.txt" set /p PREV_CANDS=<"%VENV%\llama_candidates.txt"
+if exist "%VENV%\llama_candidates_v2.txt" set /p PREV_CANDS=<"%VENV%\llama_candidates_v2.txt"
 if defined INSTALLED if "!PREV_CANDS!"=="!BACKENDS!" (
-    "%PY%" -m core.hardware --verify-llama !INSTALLED! >nul 2>&1
+    "%PY%" -m core.hardware --verify-llama !INSTALLED! --quick >nul 2>&1
     if not errorlevel 1 (
         echo [3/5] llama-cpp-python [!INSTALLED!] ja instalado.
         goto :llama_ok
@@ -70,14 +73,14 @@ for %%B in (!BACKENDS!) do (
     if not defined LLAMA_OK call :install_llama %%B
 )
 if not defined LLAMA_OK goto :fail_llama
-> "%VENV%\llama_candidates.txt" echo !BACKENDS!
+> "%VENV%\llama_candidates_v2.txt" echo !BACKENDS!
 :llama_ok
 set "BEST="
 set "CUR="
 for /f "tokens=1" %%B in ("!BACKENDS!") do set "BEST=%%B"
 if exist "%VENV%\llama_backend.txt" set /p CUR=<"%VENV%\llama_backend.txt"
 if not "!CUR!"=="!BEST!" (
-    echo       Aviso: usando a build "!CUR!" porque a preferida "!BEST!" falhou.
+    echo       Aviso: usando "!CUR!" porque "!BEST!" falhou. Motivo em logs\instalacao.log
     echo       Para tentar de novo, apague o arquivo .venv\llama_backend.txt
 )
 
@@ -103,7 +106,7 @@ echo [5/5] Calculando threads e camadas de GPU ideais...
 if errorlevel 1 echo       (aviso: scan de hardware incompleto; o app recalcula ao carregar o modelo)
 del "%TMPF%" >nul 2>&1
 echo.
-echo  Abrindo a interface no navegador... (feche esta janela para encerrar o app)
+echo  Abrindo a interface no navegador... feche esta janela para encerrar o app.
 echo.
 "%PY%" app.py
 if errorlevel 1 goto :fail
@@ -171,14 +174,22 @@ exit /b 0
 
 
 :install_llama
+rem Backends "cuda"/"vulkan" = wheel CPU + plugin oficial de GPU do llama.cpp.
 set "BK=%~1"
+set "IDX=%BK%"
+"%PY%" -m core.hardware --wheel-index %BK% > "%TMPF%" 2>nul
+if exist "%TMPF%" set /p IDX=<"%TMPF%"
 echo.
-echo       -^> Tentando a build "%BK%" ...
+echo       -^> Tentando o backend "%BK%" ...
 "%PY%" -m pip uninstall -y llama-cpp-python >nul 2>&1
-"%PY%" -m pip install "%LLAMA_SPEC%" --only-binary=llama-cpp-python --prefer-binary --extra-index-url "%WHL_BASE%/%BK%"
+"%PY%" -m pip install "%LLAMA_SPEC%" --only-binary=llama-cpp-python --prefer-binary --extra-index-url "%WHL_BASE%/!IDX!" --log "%LOGDIR%\pip_llama.log"
 if errorlevel 1 (
-    echo       [x] Sem wheel "%BK%" compativel com este Python/sistema.
+    echo       [x] Sem wheel "!IDX!" do llama-cpp-python para este sistema. Detalhes: logs\pip_llama.log
     exit /b 1
+)
+if /i not "!IDX!"=="%BK%" (
+    "%PY%" -m core.hardware --install-plugin %BK%
+    if errorlevel 1 exit /b 1
 )
 set "CUDA_PKGS="
 "%PY%" -m core.hardware --cuda-runtime %BK% > "%TMPF%" 2>nul
@@ -188,10 +199,25 @@ if defined CUDA_PKGS (
     "%PY%" -m pip install !CUDA_PKGS!
     if errorlevel 1 exit /b 1
 )
+call :ensure_vcredist
 "%PY%" -m core.hardware --verify-llama %BK%
 if errorlevel 1 exit /b 1
 > "%VENV%\llama_backend.txt" echo %BK%
 set "LLAMA_OK=1"
+exit /b 0
+
+
+:ensure_vcredist
+rem As DLLs do llama.cpp exigem o runtime do Visual C++ recente (msvcp140.dll 14.50+).
+"%PY%" -m core.hardware --needs-vcredist >nul 2>&1
+if errorlevel 1 exit /b 0
+echo       Atualizando o Microsoft Visual C++ Runtime, exigido pelo llama.cpp...
+where winget >nul 2>&1
+if errorlevel 1 (
+    echo       [aviso] Instale manualmente: https://aka.ms/vs/17/release/vc_redist.x64.exe
+    exit /b 0
+)
+winget install -e --id Microsoft.VCRedist.2015+.x64 --silent --accept-package-agreements --accept-source-agreements
 exit /b 0
 
 

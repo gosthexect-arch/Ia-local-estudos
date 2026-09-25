@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-from core import hardware
+from core import gpu_plugins, hardware
 from core.config import Settings, load_hardware_profile
 from core.gguf_info import GGUFInfo, read_gguf
 from core.models import ModelEntry
@@ -64,6 +64,12 @@ def _llama_modules() -> dict[str, Any]:
 
         _LLAMA.update(llama_cpp=llama_cpp, lcf=lcf, mtmd=mtmd_cpp, Llama=Llama, quiet=suppress_stdout_stderr)
         _LLAMA["Handler"] = _make_handler_class()
+        try:  # plugin oficial de GPU (Vulkan/CUDA) instalado pelo start.bat
+            loaded = gpu_plugins.load()
+            if loaded:
+                log.info("backend de GPU carregado: %s", ", ".join(loaded))
+        except Exception as e:  # noqa: BLE001 - sem plugin: segue na CPU/wheel instalada
+            log.warning("não foi possível carregar o plugin de GPU: %s", e)
         try:  # logs do libmtmd/clip vão para o logging do Python (só erros aparecem)
             from llama_cpp._logger import llama_log_callback  # type: ignore
 

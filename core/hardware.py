@@ -5,9 +5,13 @@ as dependências, para decidir qual build do llama-cpp-python instalar.
 
 Uso (linha de comando):
     python -m core.hardware                  # escaneia e grava hardware_profile.json
-    python -m core.hardware --backend-order  # ordem de backends p/ tentar (ex.: "cu125 cu124 vulkan cpu")
+    python -m core.hardware --backend-order  # ordem de backends p/ tentar (ex.: "cu125 cuda vulkan cpu")
     python -m core.hardware --cuda-runtime cu125   # pacotes pip do runtime CUDA, se faltarem DLLs
-    python -m core.hardware --verify-llama cu125   # confirma que o llama_cpp instalado enxerga a GPU
+    python -m core.hardware --install-plugin vulkan  # baixa o plugin oficial de GPU do llama.cpp
+    python -m core.hardware --verify-llama vulkan [--quick]  # testa se o llama.cpp usa a GPU de verdade
+
+Backends: "cu125"/"cu124"/"cu118" = wheels CUDA do llama-cpp-python; "cuda"/"vulkan" =
+wheel CPU + plugin oficial do llama.cpp (ver core/gpu_plugins.py); "cpu".
 """
 
 from __future__ import annotations
@@ -24,12 +28,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from core.config import HARDWARE_PROFILE_FILE, MODELS_DIR, load_env
+from core import gpu_plugins
+from core.config import HARDWARE_PROFILE_FILE, LOGS_DIR, MODELS_DIR, ROOT_DIR, load_env
 
 IS_WINDOWS = sys.platform == "win32"
 _NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
-
-LLAMA_INDEX_URL = "https://abetlen.github.io/llama-cpp-python/whl/{backend}"
 
 # Runtime CUDA (cudart + cuBLAS) compatível com cada wheel CUDA do llama-cpp-python.
 CUDA_RUNTIME_PKGS = {
@@ -442,25 +445,30 @@ def backend_candidates(gpus: list[dict[str, Any]], cuda_version: float | None) -
     if nvidia:
         ccs = [g["compute_capability"] for g in nvidia if g.get("compute_capability")]
         cc = min(ccs) if ccs else None
-        if cc is None or cc >= 6.0:  # wheels CUDA 12 cobrem Pascal (6.x) em diante
-            if cuda_version is None:
-                order += ["cu125", "cu124", "cu118"]
-            else:
-                if cuda_version >= 12.5:
-                    order.append("cu125")
-                if cuda_version >= 12.4:
-                    order.append("cu124")
-                if cuda_version >= 11.8 and (cc is None or cc < 9.0):
-                    order.append("cu118")
-        order.append("vulkan")  # Maxwell/Kepler ou driver antigo: Vulkan ainda acelera
+        driver = cuda_version if cuda_version is not None else 99.0  # desconhecido: deixa o teste decidir
+        if cc is None or cc >= 6.0:  # wheels CUDA 12 do llama-cpp-python cobrem Pascal (6.x) em diante
+            if driver >= 12.5:
+                order.append("cu125")
+            if driver >= 12.4:
+                order.append("cu124")
+        if (cc is None or cc >= 5.0) and driver >= 12.4:
+            order.append("cuda")  # plugin oficial CUDA 12.4 do llama.cpp
+        if not order and 11.8 <= driver < 12.4 and (cc is None or 6.0 <= cc < 9.0):
+            order.append("cu118")
+        order.append("vulkan")  # driver antigo ou GPU antiga: Vulkan ainda acelera
     elif discrete:
-        order.append("vulkan")
+        order.append("vulkan")  # AMD / Intel Arc: plugin Vulkan oficial do llama.cpp
     order.append("cpu")
     return order
 
 
 def backend_kind(backend: str) -> str:
     return "cuda" if backend.startswith("cu") else backend
+
+
+def wheel_index(backend: str) -> str:
+    """Índice de wheels do llama-cpp-python usado por cada backend (plugins usam a wheel CPU)."""
+    return "cpu" if gpu_plugins.is_plugin_backend(backend) else backend
 
 
 # ----------------------------------------------------------------------------
@@ -566,13 +574,27 @@ def llama_devices() -> list[dict[str, Any]]:
     return devices
 
 
-def verify_llama(backend: str) -> tuple[bool, str]:
+SMOKE_MODEL = ROOT_DIR / "tests" / "fixtures" / "Tiny-Qwen2-VL-F16.gguf"
+
+
+def verify_llama(backend: str, smoke: bool = True) -> tuple[bool, str]:
+    """Confirma que a instalação funciona: import, plugin, GPU visível e inferência real na GPU."""
     setup_gpu_dll_paths()
     try:
         import llama_cpp  # type: ignore
     except Exception as e:  # noqa: BLE001 - DLL ausente, wheel incompatível etc.
         return False, f"falha ao importar llama_cpp: {e}"
     version = getattr(llama_cpp, "__version__", "?")
+    if version != gpu_plugins.LLAMA_CPP_PYTHON_VERSION:
+        return False, f"llama_cpp {version} instalado; o app requer {gpu_plugins.LLAMA_CPP_PYTHON_VERSION}"
+    if gpu_plugins.is_plugin_backend(backend):
+        try:
+            loaded = gpu_plugins.load(backend)
+        except Exception as e:  # noqa: BLE001
+            return False, f"falha ao carregar o plugin {backend}: {e}"
+        if not loaded:
+            return False, (f"o plugin {backend} não carregou (arquivo ausente, driver sem suporte ou "
+                           f"DLL bloqueada) — pasta {gpu_plugins.plugin_dir(backend)}")
     if backend_kind(backend) == "cpu":
         return True, f"llama_cpp {version} (CPU)"
     try:
@@ -580,9 +602,59 @@ def verify_llama(backend: str) -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001
         return False, f"llama_cpp {version}: não foi possível listar dispositivos ({e})"
     if not gpus:
-        return False, f"llama_cpp {version}: build '{backend}' não encontrou nenhuma GPU utilizável"
+        return False, f"llama_cpp {version}: backend '{backend}' não encontrou nenhuma GPU utilizável"
     desc = ", ".join(f"{d['description'] or d['name']} ({d['total_mb']} MB)" for d in gpus)
+    if smoke and SMOKE_MODEL.exists():
+        print("      testando inferência na GPU (a 1ª execução pode compilar kernels por alguns minutos)...",
+              flush=True)
+        try:
+            llm = llama_cpp.Llama(model_path=str(SMOKE_MODEL), n_gpu_layers=-1, n_ctx=256, verbose=False)
+            llm.create_completion("Olá", max_tokens=4, temperature=0.0)
+            llm.close()
+        except Exception as e:  # noqa: BLE001
+            return False, f"GPU encontrada ({desc}), mas a inferência de teste falhou: {e}"
     return True, f"llama_cpp {version} [{backend}] -> {desc}"
+
+
+def msvc_runtime_version() -> tuple[int, int] | None:
+    """Versão (major, minor) do msvcp140.dll do sistema; None se não der para ler."""
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    path = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "msvcp140.dll")
+    if not os.path.exists(path):
+        return (0, 0)
+    try:
+        ver = ctypes.WinDLL("version")
+        size = ver.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return None
+        buf = ctypes.create_string_buffer(size)
+        if not ver.GetFileVersionInfoW(path, 0, size, buf):
+            return None
+        ptr, length = ctypes.c_void_p(), wintypes.UINT()
+        if not ver.VerQueryValueW(buf, "\\", ctypes.byref(ptr), ctypes.byref(length)):
+            return None
+        info = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_uint32 * 13)).contents  # VS_FIXEDFILEINFO
+        return info[2] >> 16, info[2] & 0xFFFF
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def needs_vcredist(minimum: tuple[int, int] = (14, 50)) -> bool:
+    version = msvc_runtime_version()
+    return version is not None and version < minimum
+
+
+def log_install(message: str) -> None:
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOGS_DIR / "instalacao.log", "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
 
 
 # ----------------------------------------------------------------------------
@@ -674,6 +746,11 @@ def print_summary(p: dict[str, Any]) -> None:
         print(f"  Modelo  : {name} -> {state} @ ctx {m.get('n_ctx')} (KV {m.get('kv_type')})")
 
 
+def _arg_after(argv: list[str], flag: str, default: str) -> str:
+    i = argv.index(flag)
+    return argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else default
+
+
 def main(argv: list[str]) -> int:
     load_env()  # permite IA_BACKEND no .env
     if "--backend-order" in argv:
@@ -685,10 +762,22 @@ def main(argv: list[str]) -> int:
         if cuda_runtime_missing(bk):
             print(" ".join(CUDA_RUNTIME_PKGS.get(bk, [])))
         return 0
+    if "--needs-vcredist" in argv:
+        return 0 if needs_vcredist() else 1
+    if "--wheel-index" in argv:
+        print(wheel_index(_arg_after(argv, "--wheel-index", "cpu")))
+        return 0
+    if "--install-plugin" in argv:
+        bk = _arg_after(argv, "--install-plugin", "")
+        ok, msg = gpu_plugins.install(bk, log=print)
+        log_install(f"[install-plugin {bk}] {'OK' if ok else 'FALHOU'}: {msg}")
+        print(("      [OK] " if ok else "      [FALHOU] ") + msg)
+        return 0 if ok else 1
     if "--verify-llama" in argv:
-        bk = argv[argv.index("--verify-llama") + 1] if len(argv) > argv.index("--verify-llama") + 1 else "cpu"
-        ok, msg = verify_llama(bk)
-        print(("  [OK] " if ok else "  [FALHOU] ") + msg)
+        bk = _arg_after(argv, "--verify-llama", "cpu")
+        ok, msg = verify_llama(bk, smoke="--quick" not in argv)
+        log_install(f"[verify {bk}] {'OK' if ok else 'FALHOU'}: {msg}")
+        print(("      [OK] " if ok else "      [FALHOU] ") + msg)
         return 0 if ok else 1
     profile = scan(include_models=True)
     write_profile(profile)
