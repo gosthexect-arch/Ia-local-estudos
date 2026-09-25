@@ -1,0 +1,5 @@
+# O cmd.exe precisa de CRLF: o .bat e versionado exatamente como esta (sem conversao).
+*.bat -text
+*.py text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
