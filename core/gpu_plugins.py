@@ -3,9 +3,10 @@
 Wheels do llama-cpp-python com GPU nem sempre existem para Windows (a build
 Vulkan, por exemplo, pode não estar publicada). Já o llama.cpp oficial publica
 em toda release o backend de GPU como um plugin carregável em tempo de execução
-(GGML_BACKEND_DL). A versão fixada do llama-cpp-python foi gerada exatamente do
-commit da release LLAMA_CPP_TAG, então a ABI é idêntica: instala-se a wheel CPU
-e o plugin é registrado com ggml_backend_load() antes de abrir o modelo.
+(GGML_BACKEND_DL). O plugin só depende da pasta ggml/ do llama.cpp; as releases em
+COMPATIBLE_TAGS têm a pasta ggml/ byte a byte idêntica à do llama-cpp-python
+fixado (mesma árvore git), então a ABI é a mesma: instala-se a wheel CPU e o
+plugin é registrado com ggml_backend_load() antes de abrir o modelo.
 
 Somente biblioteca padrão (usado pelo start.bat antes do pip e pelo app).
 """
@@ -24,8 +25,11 @@ from typing import Any, Callable
 
 IS_WINDOWS = sys.platform == "win32"
 
-LLAMA_CPP_PYTHON_VERSION = "0.3.35"
-LLAMA_CPP_TAG = "b10454"  # ggml-org/llama.cpp @ 4df29be4f = commit vendorizado no llama-cpp-python 0.3.35
+LLAMA_CPP_PYTHON_VERSION = "0.3.35"  # vendoriza ggml-org/llama.cpp @ 4df29be4f (tag b10454)
+# Releases com ggml/ idêntica ao 4df29be4f (árvore git 009135aa3448), da mais próxima para a
+# mais antiga. A própria b10454 é um commit "[no ci]" e não tem binários publicados.
+COMPATIBLE_TAGS = ["b10453", "b10452", "b10451", "b10450", "b10448", "b10447", "b10446", "b10444", "b10443",
+                   "b10442", "b10454"]
 RELEASE_URL = "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{name}"
 
 PLUGINS: dict[str, dict[str, list[str]]] = {
@@ -44,6 +48,8 @@ PLUGINS: dict[str, dict[str, list[str]]] = {
 }
 
 _LOADED: list[str] | None = None
+LAST_ERROR = ""          # motivo da última falha ao carregar um plugin (mostrado na UI)
+_HANDLES: list[Any] = []  # mantém as DLLs carregadas durante todo o processo
 
 
 def is_plugin_backend(backend: str) -> bool:
@@ -51,7 +57,11 @@ def is_plugin_backend(backend: str) -> bool:
 
 
 def plugin_dir(backend: str, root: Path | None = None) -> Path:
-    return (root or Path(sys.prefix)) / "llama_gpu" / f"{LLAMA_CPP_TAG}-{backend}"
+    return (root or Path(sys.prefix)) / "llama_gpu" / backend
+
+
+class NotPublished(OSError):
+    """A release não tem o arquivo (HTTP 404): tenta a próxima release compatível."""
 
 
 # --------------------------------------------------------------------------- instalação
@@ -80,6 +90,8 @@ def _download(url: str, dest: Path, opener: Callable[..., Any], log: Callable[[s
                     raise OSError(f"download incompleto ({done} de {total} bytes)")
             return
         except Exception as e:  # noqa: BLE001 - rede instável: tenta de novo
+            if getattr(e, "code", None) == 404:
+                raise NotPublished(f"{url.rsplit('/', 1)[-1]} não existe nesta release") from e
             last_error = e
             log(f"      tentativa {attempt} falhou: {e}")
             time.sleep(2 * attempt)
@@ -108,25 +120,41 @@ def install(backend: str, root: Path | None = None, *, opener: Callable[..., Any
         return False, "plugins oficiais são baixados apenas no Windows"
     dest = plugin_dir(backend, root)
     tmp = dest.with_name(dest.name + ".tmp")
-    shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True)
+    skipped: list[str] = []
     try:
-        for archive in spec["archives"]:
-            name = archive.format(tag=LLAMA_CPP_TAG)
-            zip_path = tmp / name
-            _download(RELEASE_URL.format(tag=LLAMA_CPP_TAG, name=name), zip_path, opener, log)
-            _extract(zip_path, spec["files"], tmp)
-            zip_path.unlink()
-        missing = [f for f in spec["load"] if not (tmp / f).exists()]
-        if missing:
-            return False, f"arquivos ausentes no pacote oficial: {', '.join(missing)}"
-        shutil.rmtree(dest, ignore_errors=True)
-        tmp.rename(dest)
+        for tag in COMPATIBLE_TAGS:
+            shutil.rmtree(tmp, ignore_errors=True)
+            tmp.mkdir(parents=True)
+            try:
+                for archive in spec["archives"]:
+                    name = archive.format(tag=tag)
+                    zip_path = tmp / name
+                    _download(RELEASE_URL.format(tag=tag, name=name), zip_path, opener, log)
+                    _extract(zip_path, spec["files"], tmp)
+                    zip_path.unlink()
+            except NotPublished:
+                skipped.append(tag)
+                log(f"      release {tag} sem binários de {backend}; tentando a próxima compatível...")
+                continue
+            missing = [f for f in spec["load"] if not (tmp / f).exists()]
+            if missing:
+                return False, f"arquivos ausentes no pacote oficial {tag}: {', '.join(missing)}"
+            (tmp / "release.txt").write_text(tag, encoding="utf-8")
+            shutil.rmtree(dest, ignore_errors=True)
+            tmp.rename(dest)
+            return True, f"plugin {backend} (llama.cpp {tag}) instalado em {dest}"
     except (OSError, zipfile.BadZipFile) as e:
         return False, str(e)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return True, f"plugin {backend} (llama.cpp {LLAMA_CPP_TAG}) instalado em {dest}"
+    return False, f"nenhuma release compatível tem o plugin {backend} ({', '.join(skipped)})"
+
+
+def installed_release(backend: str, root: Path | None = None) -> str:
+    try:
+        return (plugin_dir(backend, root) / "release.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 # --------------------------------------------------------------------------- carga
@@ -157,20 +185,31 @@ def load_plugin_files(plugins: list[Path], preload: list[Path] = ()) -> list[str
             ctypes.CDLL(str(dep))
         except OSError:
             pass
+    global LAST_ERROR
     lib = _ggml.libggml
     lib.ggml_backend_load.argtypes = [ctypes.c_char_p]
     lib.ggml_backend_load.restype = ctypes.c_void_p
     loaded = []
     for path in plugins:
         path = Path(path).resolve()  # dlopen/LoadLibrary sem caminho absoluto não procuram na pasta atual
-        if path.exists() and lib.ggml_backend_load(_native_path(path)):
+        if not path.exists():
+            LAST_ERROR = f"{path.name} não encontrado em {path.parent}"
+            continue
+        try:  # carrega antes via ctypes só para obter a mensagem de erro do sistema, se houver
+            _HANDLES.append(ctypes.CDLL(str(path)))
+        except OSError as e:
+            LAST_ERROR = f"{path.name} não pôde ser carregado: {e}"
+            continue
+        if lib.ggml_backend_load(_native_path(path)):
             loaded.append(path.name)
+        else:
+            LAST_ERROR = f"{path.name} recusado pelo ggml (versão incompatível ou GPU/driver sem suporte)"
     return loaded
 
 
 def load(backend: str | None = None, root: Path | None = None) -> list[str]:
     """Carrega o plugin do backend instalado (uma única vez por processo)."""
-    global _LOADED
+    global _LOADED, LAST_ERROR
     if _LOADED is not None:
         return _LOADED
     _LOADED = []
@@ -182,6 +221,8 @@ def load(backend: str | None = None, root: Path | None = None) -> list[str]:
     spec = PLUGINS.get(backend)
     folder = plugin_dir(backend, root) if spec else None
     if spec is None or folder is None or not folder.is_dir():
+        if spec is not None:
+            LAST_ERROR = f"plugin {backend} não instalado ({folder})"
         return _LOADED
     if backend == "cuda":
         # Kernels compilados na hora (PTX) ficam em cache: só a 1ª execução é lenta.

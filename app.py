@@ -122,6 +122,8 @@ def status_md() -> str:
         return f"<small>{APP.status}</small>"
     tools = "nativo do modelo" if lm.native_tools else "via prompt"
     notes = "".join(f"<br>ℹ️ {n}" for n in lm.notes)
+    if lm.plan.backend == "cpu" and (why := APP.engine.gpu_note()):
+        notes += f"<br>⚠️ <b>GPU não está em uso.</b> {why}"
     return (f"<small>✅ <b>{lm.entry.path.name}</b> pronto ({lm.load_seconds:.1f}s)<br>"
             f"{lm.plan.describe()}<br>contexto {lm.n_ctx} · {lm.n_threads} threads · ferramentas: {tools}"
             f"{notes}</small>")

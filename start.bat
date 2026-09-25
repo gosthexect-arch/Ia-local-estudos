@@ -59,7 +59,7 @@ rem ---------------------------------------------------------------- 4
 set "INSTALLED="
 set "PREV_CANDS="
 if exist "%VENV%\llama_backend.txt" set /p INSTALLED=<"%VENV%\llama_backend.txt"
-if exist "%VENV%\llama_candidates_v2.txt" set /p PREV_CANDS=<"%VENV%\llama_candidates_v2.txt"
+if exist "%VENV%\llama_candidates_v3.txt" set /p PREV_CANDS=<"%VENV%\llama_candidates_v3.txt"
 if defined INSTALLED if "!PREV_CANDS!"=="!BACKENDS!" (
     "%PY%" -m core.hardware --verify-llama !INSTALLED! --quick >nul 2>&1
     if not errorlevel 1 (
@@ -73,7 +73,7 @@ for %%B in (!BACKENDS!) do (
     if not defined LLAMA_OK call :install_llama %%B
 )
 if not defined LLAMA_OK goto :fail_llama
-> "%VENV%\llama_candidates_v2.txt" echo !BACKENDS!
+> "%VENV%\llama_candidates_v3.txt" echo !BACKENDS!
 :llama_ok
 set "BEST="
 set "CUR="

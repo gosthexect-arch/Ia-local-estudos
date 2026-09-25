@@ -593,8 +593,7 @@ def verify_llama(backend: str, smoke: bool = True) -> tuple[bool, str]:
         except Exception as e:  # noqa: BLE001
             return False, f"falha ao carregar o plugin {backend}: {e}"
         if not loaded:
-            return False, (f"o plugin {backend} não carregou (arquivo ausente, driver sem suporte ou "
-                           f"DLL bloqueada) — pasta {gpu_plugins.plugin_dir(backend)}")
+            return False, f"o plugin {backend} não carregou: {gpu_plugins.LAST_ERROR}"
     if backend_kind(backend) == "cpu":
         return True, f"llama_cpp {version} (CPU)"
     try:

@@ -2,8 +2,8 @@
 #
 # llama-cpp-python: o start.bat instala ANTES a build certa para o seu hardware
 # (wheel CUDA, ou wheel CPU + plugin oficial de GPU Vulkan/CUDA do llama.cpp).
-# A versao e fixada porque os plugins oficiais (release b10454 do llama.cpp) sao
-# compilados do mesmo commit desta versao: ABI identica.
+# A versao e fixada porque os plugins oficiais de GPU (releases b10442-b10453 do
+# llama.cpp) tem a pasta ggml/ identica a desta versao: ABI identica.
 llama-cpp-python==0.3.35
 numpy>=1.24
 jinja2>=3.1

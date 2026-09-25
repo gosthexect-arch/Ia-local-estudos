@@ -438,6 +438,19 @@ class LlamaEngine:
             log.warning("build '%s' instalada, mas nenhuma GPU foi encontrada pelo llama.cpp", installed)
         return "cpu", 0, 0
 
+    def gpu_note(self) -> str:
+        """Explica por que uma GPU dedicada detectada não está sendo usada ('' se estiver)."""
+        gpus = [g for g in self.profile.get("gpus", []) if not g.get("integrated")]
+        if not gpus:
+            return ""
+        installed = hardware.installed_backend() or self.profile.get("installed_backend", "")
+        if installed in ("", "cpu"):
+            return ("A instalação do llama.cpp ficou em modo CPU; o motivo está em logs/instalacao.log. "
+                    "Atualize o app e rode o start.bat de novo.")
+        if gpu_plugins.is_plugin_backend(installed) and not gpu_plugins._LOADED:
+            return f"O plugin de GPU '{installed}' não carregou: {gpu_plugins.LAST_ERROR or 'veja logs/app.log'}"
+        return ""
+
     def threads(self) -> int:
         rec = self.profile.get("recommended") or hardware.recommend_threads(hardware.detect_cpu())
         return int(rec.get("n_threads") or 4)
